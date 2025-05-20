@@ -10,15 +10,42 @@
   />
   <style>
     #map {
-      height: 600px;
+      height: 790px;
       width: 100%;
     }
     #control-panel {
-      margin: 10px;
+      position: absolute;
+      top: 4.5%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 1000;
+      background: white;
+      padding: 10px;
+      border-radius: 5px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
     }
     input[type="text"] {
       width: 200px;
       margin-right: 10px;
+    }
+    #suggestions {
+      position: absolute;
+      background: white;
+      border: 1px solid #ccc;
+      max-height: 150px;
+      overflow-y: auto;
+      width: 200px;
+      display: none;
+    }
+    #suggestions div {
+      padding: 5px;
+      cursor: pointer;
+    }
+    #suggestions div:hover {
+      background: #f0f0f0;
+    }
+    button {
+      margin: 5px 0;
     }
   </style>
 </head>
@@ -27,6 +54,7 @@
   <div id="control-panel">
     <label>Nhập tọa độ (lat,lng): </label>
     <input type="text" id="input-coord" placeholder="Ví dụ: 10.762622,106.660172" />
+    <div id="suggestions"></div>
     <button id="btn-add-point">Thêm điểm</button>
     <button id="btn-clear">Xóa đường và điểm</button>
   </div>
@@ -45,24 +73,20 @@
 
   // Các điểm bán hàng mẫu (cửa hàng)
   const stores = [
-    { name: "Trang Xì Po NVC", coords: [10.765, 106.67] },
-    { name: "Trang Xì Po Tạ Thị Phi", coords: [10.755, 106.65] },
-    { name: "Trang Xì Po NVL", coords: [10.77, 106.66] }
+    { name: "Trang Xì Po NVC", coords: [10.017047400000008, 105.73768367607477] },
+    { name: "Trang Xì Po Lê Hồng Phong ", coords: [10.074379666652872, 105.7509585809271] },
+    { name: "Trang Xì Po NVL", coords: [10.027907298466653, 105.75513862606594] },
+    { name: "Trang Xì Po Võ Văn Kiệt", coords: [10.04907813997007, 105.75823775036275] }
   ];
 
-  // Marker cửa hàng
+  // Danh sách marker cửa hàng để có thể thao tác sau
   const storeMarkers = [];
-  stores.forEach(store => {
-    const marker = L.marker(store.coords).addTo(map)
-      .bindPopup(store.name)
-      .on('click', () => {
-        addPoint(store.coords, store.name);
-      });
-    storeMarkers.push(marker);
-  });
 
   // Danh sách điểm người dùng chọn (bao gồm điểm đứng và điểm cửa hàng)
   let routePoints = [];
+
+  // Danh sách điểm gần đây để gợi ý
+  let recentPoints = [];
 
   // Marker điểm người dùng chọn
   let pointMarkers = [];
@@ -70,23 +94,57 @@
   // Polyline đường đi
   let routeLine = null;
 
-  // Icon đặc biệt cho vị trí hiện tại
+  // Icon đặc biệt cho vị trí hiện tại (màu đỏ)
   const currentLocationIcon = L.icon({
-    iconUrl: 'https://cdn-icons-png.flaticon.com/512/64/64113.png', // icon vị trí hiện tại
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png', // Icon định vị màu đỏ
     iconSize: [30, 40],
     iconAnchor: [15, 40],
     popupAnchor: [0, -35]
   });
 
+  // Hàm gọi Google Distance Matrix API lấy khoảng cách và thời gian
+  async function getDistanceDuration(origin, destination) {
+    const apiKey = 'YOUR_ACTUAL_GOOGLE_API_KEY'; // Thay bằng API key thực tế từ Google Cloud Console
+    const modes = ['driving', 'bicycling']; // driving = ô tô, bicycling = xe máy giả lập
+    const results = {};
+
+    for (const mode of modes) {
+      // URL API Google Distance Matrix
+      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?units=metric&origins=${origin[0]},${origin[1]}&destinations=${destination[0]},${destination[1]}&mode=${mode}&key=${apiKey}`;
+
+      try {
+        // Dùng proxy để tránh lỗi CORS (chỉ dùng cho demo, nên thay bằng backend)
+        const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
+        const response = await fetch(proxyUrl + url);
+        const data = await response.json();
+
+        if (data.status === "OK") {
+          const element = data.rows[0].elements[0];
+          if (element.status === "OK") {
+            results[mode] = {
+              distance: element.distance.text,
+              duration: element.duration.text
+            };
+          }
+        }
+      } catch (error) {
+        console.error('Lỗi gọi Distance Matrix API:', error);
+      }
+    }
+    return results;
+  }
+
   // Hàm thêm điểm vào danh sách và đánh dấu trên bản đồ
   function addPoint(latlng, label = null, isCurrentLocation = false) {
     routePoints.push(latlng);
+    recentPoints.push(latlng);
+    if (recentPoints.length > 5) recentPoints.shift(); // Giữ tối đa 5 điểm gần đây
     const markerOptions = isCurrentLocation ? { icon: currentLocationIcon, draggable: true } : { draggable: true };
     const marker = L.marker(latlng, markerOptions).addTo(map);
     if (label) {
       marker.bindPopup(label).openPopup();
     } else {
-      marker.bindPopup(`Điểm ${routePoints.length}`).openPopup();
+      marker.bindPopup(`Điểm ${routePoints.length}: ${latlng[0].toFixed(6)}, ${latlng[1].toFixed(6)}`).openPopup();
     }
     pointMarkers.push(marker);
 
@@ -95,22 +153,57 @@
       const idx = pointMarkers.indexOf(marker);
       if (idx !== -1) {
         routePoints[idx] = [e.target.getLatLng().lat, e.target.getLatLng().lng];
+        recentPoints.push(routePoints[idx]);
+        if (recentPoints.length > 5) recentPoints.shift();
         drawRoute();
+        updateSuggestions();
       }
     });
 
+    updateSuggestions();
+    drawRoute();
+  }
+
+  // Hàm thêm điểm trung gian
+  function addIntermediatePoint(latlng) {
+    if (routePoints.length < 2) {
+      alert('Cần ít nhất 2 điểm để thêm điểm trung gian');
+      return;
+    }
+    routePoints.splice(1, 0, latlng); // Chèn tại index 1 (giữa điểm đầu và cuối)
+    recentPoints.push(latlng);
+    if (recentPoints.length > 5) recentPoints.shift();
+    const marker = L.marker(latlng, { draggable: true }).addTo(map)
+      .bindPopup(`Điểm trung gian: ${latlng[0].toFixed(6)}, ${latlng[1].toFixed(6)}`).openPopup();
+    pointMarkers.splice(1, 0, marker);
+
+    marker.on('dragend', function (e) {
+      const idx = pointMarkers.indexOf(marker);
+      if (idx !== -1) {
+        routePoints[idx] = [e.target.getLatLng().lat, e.target.getLatLng().lng];
+        recentPoints.push(routePoints[idx]);
+        if (recentPoints.length > 5) recentPoints.shift();
+        drawRoute();
+        updateSuggestions();
+      }
+    });
+
+    updateSuggestions();
     drawRoute();
   }
 
   // Xóa tất cả điểm và đường
   function clearAll() {
     routePoints = [];
+    recentPoints = [];
     pointMarkers.forEach(m => map.removeLayer(m));
     pointMarkers = [];
     if (routeLine) {
       map.removeLayer(routeLine);
       routeLine = null;
     }
+    document.getElementById('input-coord').value = '';
+    document.getElementById('suggestions').style.display = 'none';
   }
 
   // Vẽ đường đi dựa trên routePoints bằng API OSRM
@@ -160,10 +253,68 @@
     }
   }
 
-  // Xử lý click trên bản đồ để thêm điểm
+  // Cập nhật gợi ý tọa độ
+  function updateSuggestions() {
+    const suggestions = document.getElementById('suggestions');
+    suggestions.innerHTML = '';
+    const allSuggestions = [
+      ...stores.map(s => ({ name: s.name, coords: s.coords })),
+      ...recentPoints.map(p => ({ name: `Điểm: ${p[0].toFixed(6)}, ${p[1].toFixed(6)}`, coords: p }))
+    ];
+
+    allSuggestions.forEach(point => {
+      const div = document.createElement('div');
+      div.textContent = point.name;
+      div.onclick = function () {
+        document.getElementById('input-coord').value = `${point.coords[0]},${point.coords[1]}`;
+        suggestions.style.display = 'none';
+      };
+      suggestions.appendChild(div);
+    });
+
+    suggestions.style.display = allSuggestions.length ? 'block' : 'none';
+  }
+
+  // Tạo marker cửa hàng và thêm sự kiện click hiển thị popup khoảng cách, thời gian
+  stores.forEach(store => {
+    const marker = L.marker(store.coords).addTo(map)
+      .bindPopup(store.name)
+      .on('click', async () => {
+        if (routePoints.length === 0) {
+          alert("Vui lòng chọn điểm xuất phát (ví dụ vị trí hiện tại hoặc điểm khác)");
+          return;
+        }
+        const origin = routePoints[0]; // Điểm đầu tiên (ví dụ vị trí hiện tại)
+        const destination = store.coords;
+
+        // Lấy thông tin khoảng cách và thời gian
+        const info = await getDistanceDuration(origin, destination);
+
+        let popupContent = `<b>${store.name}</b><br/>`;
+        if (info.driving) {
+          popupContent += `Ô tô: ${info.driving.distance}, ${info.driving.duration}<br/>`;
+        }
+        if (info.bicycling) {
+          popupContent += `Xe máy (ước lượng): ${info.bicycling.distance}, ${info.bicycling.duration}`;
+        }
+        marker.bindPopup(popupContent).openPopup();
+
+        // Thêm điểm cửa hàng vào lộ trình và vẽ đường
+        addPoint(destination, store.name);
+      });
+    storeMarkers.push(marker);
+  });
+
+  // Xử lý click trái trên bản đồ để thêm điểm
   map.on('click', function (e) {
     addPoint([e.latlng.lat, e.latlng.lng]);
     alert(`Bạn đã chọn điểm tại: ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`);
+  });
+
+  // Xử lý click phải để thêm điểm trung gian
+  map.on('contextmenu', function (e) {
+    addIntermediatePoint([e.latlng.lat, e.latlng.lng]);
+    alert(`Đã thêm điểm trung gian tại: ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`);
   });
 
   // Xử lý nút thêm điểm nhập tay
@@ -188,6 +339,16 @@
     document.getElementById('input-coord').value = '';
   });
 
+  // Xử lý sự kiện nhập liệu để hiển thị gợi ý
+  document.getElementById('input-coord').addEventListener('input', function () {
+    const suggestions = document.getElementById('suggestions');
+    if (this.value.trim()) {
+      updateSuggestions();
+    } else {
+      suggestions.style.display = 'none';
+    }
+  });
+
   // Xử lý nút xóa
   document.getElementById('btn-clear').addEventListener('click', () => {
     clearAll();
@@ -210,9 +371,15 @@
         // Cho phép kéo marker vị trí hiện tại để cập nhật tọa độ và đường đi
         marker.on('dragend', function (e) {
           routePoints[0] = [e.target.getLatLng().lat, e.target.getLatLng().lng];
+          recentPoints.push(routePoints[0]);
+          if (recentPoints.length > 5) recentPoints.shift();
           drawRoute();
+          updateSuggestions();
         });
 
+        recentPoints.push(latlng);
+        if (recentPoints.length > 5) recentPoints.shift();
+        updateSuggestions();
         drawRoute();
       },
       err => {
@@ -221,6 +388,5 @@
     );
   }
 </script>
-
 </body>
 </html>
