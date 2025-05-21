@@ -102,38 +102,6 @@
     popupAnchor: [0, -35]
   });
 
-  // Hàm gọi Google Distance Matrix API lấy khoảng cách và thời gian
-  async function getDistanceDuration(origin, destination) {
-    const apiKey = 'AIzaSyC_rDTwYuwmjoYFtWG4kROYbbwZRmr5OX0';
-    const modes = ['driving', 'bicycling'];
-    const results = {};
-
-    for (const mode of modes) {
-      // URL API Google Distance Matrix
-      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?units=metric&origins=${origin[0]},${origin[1]}&destinations=${destination[0]},${destination[1]}&mode=${mode}&key=${apiKey}`;
-
-      try {
-        // Dùng proxy để tránh lỗi CORS (chỉ dùng cho demo, nên thay bằng backend)
-        const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
-        const response = await fetch(proxyUrl + url);
-        const data = await response.json();
-
-        if (data.status === "OK") {
-          const element = data.rows[0].elements[0];
-          if (element.status === "OK") {
-            results[mode] = {
-              distance: element.distance.text,
-              duration: element.duration.text
-            };
-          }
-        }
-      } catch (error) {
-        console.error('Lỗi gọi Distance Matrix API:', error);
-      }
-    }
-    return results;
-  }
-
   // Hàm thêm điểm vào danh sách và đánh dấu trên bản đồ
   function addPoint(latlng, label = null, isCurrentLocation = false) {
     routePoints.push(latlng);
@@ -275,32 +243,13 @@
     suggestions.style.display = allSuggestions.length ? 'block' : 'none';
   }
 
-  // Tạo marker cửa hàng và thêm sự kiện click hiển thị popup khoảng cách, thời gian
+  // Tạo marker cửa hàng và thêm sự kiện click hiển thị popup
   stores.forEach(store => {
     const marker = L.marker(store.coords).addTo(map)
       .bindPopup(store.name)
-      .on('click', async () => {
-        if (routePoints.length === 0) {
-          alert("Vui lòng chọn điểm xuất phát (ví dụ vị trí hiện tại hoặc điểm khác)");
-          return;
-        }
-        const origin = routePoints[0]; // Điểm đầu tiên (ví dụ vị trí hiện tại)
-        const destination = store.coords;
-
-        // Lấy thông tin khoảng cách và thời gian
-        const info = await getDistanceDuration(origin, destination);
-
-        let popupContent = `<b>${store.name}</b><br/>`;
-        if (info.driving) {
-          popupContent += `Ô tô: ${info.driving.distance}, ${info.driving.duration}<br/>`;
-        }
-        if (info.bicycling) {
-          popupContent += `Xe máy (ước lượng): ${info.bicycling.distance}, ${info.bicycling.duration}`;
-        }
-        marker.bindPopup(popupContent).openPopup();
-
-        // Thêm điểm cửa hàng vào lộ trình và vẽ đường
-        addPoint(destination, store.name);
+      .on('click', () => {
+        // Chỉ thêm điểm cửa hàng vào lộ trình mà không đo khoảng cách/thời gian
+        addPoint(store.coords, store.name);
       });
     storeMarkers.push(marker);
   });
